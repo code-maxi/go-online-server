@@ -1,5 +1,5 @@
 import { emptyArray } from "./adds"
-import { GoUser } from "./user"
+import { ClientGoGameStateI, GoMoveI, GoUser } from "./user"
 
 export interface GoGameConfigI {
     size: number,
@@ -8,21 +8,46 @@ export interface GoGameConfigI {
     advance: number,
     public: boolean
 }
+
+export interface GoEndI {
+    blackPoints: number,
+    whitePoints: number,
+    givenUpUser?: string
+}
+
 export class GoGame {
-    static isGameConfigValid(config: GoGameConfigI): string | undefined {
-        if (!(config.firstColor === 'b' || config.firstColor === 'w')) return "The parameter firstColor must either be 'b' or 'w'."
-        if (config.size < 5 || config.size > 19) return "The board size must be in the range of 5 to 19."
-        if (config.size < 0.5 || config.size > 15.5) return "The advance must be in the range of 0.5 to 15.5."
+    static validateGameConfig(config: GoGameConfigI): string | undefined {
+        if (config.name[0] !== '#') return "The game name has to start with a '#'."
+        else if (config.name.length < 3 || config.name.length > 20) return "The length of the game name has to be in the range from 3 to 20."
+        else if (!(config.firstColor === 'b' || config.firstColor === 'w')) return "The parameter firstColor must either be 'b' or 'w'."
+        else if (config.size < 5 || config.size > 19) return "The board size must be in the range of 5 to 19."
+        else if (config.size < 0.5 || config.size > 15.5) return "The advance must be in the range of 0.5 to 15.5."
         else return undefined
     }
+    static validateUserName(name: string): string | undefined {
+        if (name.length < 3 || name.length > 20) return "The length of the game name has to be in the range from 5 to 20."
+        else return undefined
+    }
+
+    static FINISHED_GAME_TIMEOUT = 5000
+
+    private users = new Map<string, GoUser>()
 
     private state: string[][] = []
     private turn = 'b'
     private config: GoGameConfigI
+
+    private goEnd: GoEndI | null = null
     
-    private whitePlayer: string | undefined
-    private blackPlayer: string | undefined
-    private users = new Map<string, GoUser>()
+    private whitePlayer: string | null = null
+    private blackPlayer: string | null = null
+
+    private passingUsers: string[] = []
+    private givingUpUsers: string[] = []
+
+    private whitePiecesCaught = 0
+    private blackPiecesCaught = 0
+
 
     constructor(config: GoGameConfigI) {
         this.config = config
@@ -55,27 +80,161 @@ export class GoGame {
         ]
     }
 
-    userMove(gridX: number, gridY: number, userName: string): string | undefined {
-        if (this.blackPlayer && this.whitePlayer) {
-            if (userName === this.blackPlayer || userName === this.whitePlayer) {
-                if (userName === this.turn) {
-                    const moveResult = this.move(gridX, gridX)
-                    if (!moveResult) {
-                        this.users.forEach((user, id) => {
-                            
-                        })
-                    }
-                    return moveResult
+    inviteUser(user: GoUser, name: string): string | undefined {
+        if (user.isInitialized()) return "You have already been initialized."
+        else {
+            if (this.users.get(name)) return "The user name '" + name + "' does already exist."
+            else {
+                const nameValidation = GoGame.validateUserName(name)
+                if (nameValidation) return nameValidation
+                else {
+                    let role: string | null = null
+        
+                    if (!this.blackPlayer && !this.whitePlayer) role = this.config.firstColor
+                    else if (this.whitePlayer) role = this.blackPlayer
+                    else if (this.blackPlayer) role = this.whitePlayer
+
+                    user.initialize(this, name, role)
+                    this.users.set(name, user)
+
+                    console.log("User name: '" + name + "', role: '" + role + "' has successfully joined.")
+                    console.log('User list: ' + JSON.stringify([...this.users.values()]))
+                    console.log("______")
+                    
+                    return undefined
                 }
-                else return 'It is not your turn to move.'
             }
-            else return 'You are not allowed to do this move.'
+        }
+    }
+
+    private getGameEnd(): GoEndI {
+        // TODO
+
+        let blackPoints = 0
+        let whitePoints = 0
+
+        whitePoints += this.config.advance
+        
+        blackPoints += this.whitePiecesCaught
+        whitePoints += this.blackPiecesCaught
+
+        const areaPoints = this.getAreaPoints()
+
+        blackPoints += areaPoints.blackAreaPoints
+        whitePoints += areaPoints.whiteAreaPoints
+
+        return {
+            whitePoints: whitePoints,
+            blackPoints: blackPoints
+        }
+    }
+
+    private getAreaPoints(): { whiteAreaPoints: number, blackAreaPoints: number } {
+        // TODO!!!
+
+        return {
+            whiteAreaPoints: 0,
+            blackAreaPoints: 0
+        }
+    }
+
+    private clientMoveGameState(): ClientGoGameStateI {
+        return {
+            pieces: this.state,
+            turn: this.turn,
+            gameName: this.config.name,
+            blackPiecesCaught: this.blackPiecesCaught,
+            whitePiecesCaught: this.whitePiecesCaught,
+            passingPlayers: this.passingUsers,
+            givingUpPlayers: this.givingUpUsers
+        }
+    }
+
+    private clientUserGameState(): ClientGoGameStateI {
+        return {
+            viewers: [...this.users.keys()].filter(id => id !== this.blackPlayer && id !== this.whitePlayer),
+            blackPlayer: this.blackPlayer,
+            whitePlayer: this.whitePlayer,
+            turn: this.turn,
+            gameName: this.config.name
+        }
+    }
+
+    private clientGameStateAllInAll(): ClientGoGameStateI {
+        return {
+            ...this.clientMoveGameState(),
+            ...this.clientUserGameState(),
+            goEnd: this.goEnd
+        }
+    }
+
+    private userEndGame(givenUpUser?: string) {
+        // set go end result
+        this.goEnd = { ...this.getGameEnd(), givenUpUser: givenUpUser}
+
+        // wait a little bit
+        setTimeout(() => {
+            this.users.forEach((user,_) => {
+                user.updateGameState({
+                    goEnd: this.goEnd
+                })
+            })
+        }, GoGame.FINISHED_GAME_TIMEOUT)
+    }
+
+    userMove(move: GoMoveI, userName: string): string | undefined {
+        if (this.blackPlayer && this.whitePlayer) { // if two players are in game
+            if (!this.goEnd) { // if game hasn't finished yet
+                if (userName === this.blackPlayer || userName === this.whitePlayer) { // if user is a player
+                    if (userName === this.turn) { // If it was user's turn
+                        let moveResult: string | undefined = undefined
+                        
+                        if (move.pos) {
+                            moveResult = this.move(
+                                move.pos.gridX, 
+                                move.pos.gridY
+                            )
+                        }
+                        else if (move.pass) {
+                            this.passingUsers.push(userName)
+                            if (this.passingUsers.length === 2) {
+                                // GAME END!
+                                this.userEndGame()
+                            }
+                        }
+                        else if (move.giveup) {
+                            this.givingUpUsers.push(userName)
+                            if (this.givingUpUsers.length === 2) {
+                                // GAME END! - this.givingUpUsers[0] has given up and looses in anyway
+                                this.userEndGame(this.givingUpUsers[0])
+                            }
+                        }
+                        else moveResult = "There must either move.pos, move.pass or move.givup be set."
+    
+                        if (!moveResult) {
+                            if (!move.pass) this.passingUsers = []
+                            if (!move.giveup) this.givingUpUsers = []
+
+                            this.turn = this.otherColor(this.turn) // change player's turn
+
+                            const newGameState = this.clientMoveGameState()
+
+                            this.users.forEach((user, id) => {
+                                user.updateGameState(newGameState)
+                            })
+                        }
+                        return moveResult
+                    }
+                    else return 'It is not your turn to move.'
+                }
+                else return 'You are not allowed to do this move.'
+            } 
+            else return 'The game has already finished.'
         }
         else return 'There are only you in the game yet.'
     }
 
-    private move(gridX: number, gridY: number): string | undefined {
-
+    move(gridX: number, gridY: number, changeTurn?: boolean): string | undefined {
         console.log()
         console.log('Executing move ' + this.getTurn() + gridX + '_' + gridY + '!')
         console.log(this.otherColor(this.turn))
@@ -95,13 +254,12 @@ export class GoGame {
 
         else {
             this.state[gridY][gridX] = this.turn
-            this.removeDeadPieces()
+            const caughtPieces = this.removeDeadPieces()
 
-            this.turn = this.otherColor(this.turn)
+            this.blackPiecesCaught += caughtPieces.blackRemoved
+            this.whitePiecesCaught += caughtPieces.whiteRemoved
 
-            console.log()
-            console.log(this.toString())
-            console.log()
+            if (changeTurn === true) this.turn = this.otherColor(this.turn)
 
             return undefined
         }

@@ -4,8 +4,16 @@ import { GoGame, GoGameConfigI } from './game';
 import { stringToBoolean } from './adds';
 
 export class GoServer {
+    static instance: GoServer
+
     private app: express.Express
     private games = new Map<string, GoGame>()
+
+    getGame(gameName: string) { return this.games.get(gameName) }
+
+    constructor() {
+        GoServer.instance = this
+    }
 
     gameArray() { return [ ...this.games.values() ] }
 
@@ -17,7 +25,7 @@ export class GoServer {
         })
     }
 
-    initializeExpress() {
+    private initializeExpress() {
         console.log('Initializing Go Server...')
 
         this.app.use((request, _, next) => {
@@ -65,7 +73,7 @@ export class GoServer {
             return "The game name '"+config.name+"' does already exist!"
 
         else {
-            const validation = GoGame.isGameConfigValid(config)
+            const validation = GoGame.validateGameConfig(config)
             if (validation) return validation
             else {
                 const newGame = new GoGame(config)
@@ -93,7 +101,7 @@ export class GoServer {
         const ask = () => {
             rl.question('\nIt\'s ' + goGame.getTurn()+ '\'s turn. Enter Move: \n', (data) => {
                 const gridPos = (data as string).split(',').map(s => +s)
-                const moveResult = goGame.move(gridPos[0], gridPos[1])
+                const moveResult = goGame.move(gridPos[0], gridPos[1], true)
                 if (moveResult) console.log('Error: ' + moveResult)
                 ask()
             })
