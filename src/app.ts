@@ -9,4 +9,9 @@ function readArg(tag: string): string | undefined {
 }
 
 const server = new GoServer()
-server.listen(+(readArg ? readArg : 3000))
+
+const portArg = readArg('port')
+
+server.listen(+(portArg ? portArg : 3000))
+
+//server.goLoop()
