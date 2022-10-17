@@ -12,6 +12,7 @@ const server = new GoServer()
 
 const portArg = readArg('port')
 
-server.listen(+(portArg ? portArg : 3000))
+server.listen(+(portArg ? portArg : 3001), +(portArg ? portArg : 3001) + 1, () => {
+})
 
 //server.goLoop()

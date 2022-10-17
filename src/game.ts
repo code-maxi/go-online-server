@@ -1,5 +1,5 @@
 import { emptyArray } from "./adds"
-import { ClientGoGameStateI, GoMoveI, GoUser } from "./user"
+import { ClientGoGameStateI, GoEndI, GoMoveI, GoUser } from "./user"
 
 export interface GoGameConfigI {
     size: number,
@@ -7,12 +7,6 @@ export interface GoGameConfigI {
     name: string,
     advance: number,
     public: boolean
-}
-
-export interface GoEndI {
-    blackPoints: number,
-    whitePoints: number,
-    givenUpUser?: string
 }
 
 export class GoGame {
@@ -25,25 +19,27 @@ export class GoGame {
         else return undefined
     }
     static validateUserName(name: string): string | undefined {
-        if (name.length < 3 || name.length > 20) return "The length of the game name has to be in the range from 5 to 20."
+        if (name.toLowerCase().includes('waiting')) return "The name must not include 'waiting'."
+        else if (name.length < 3 || name.length > 20) return "The length of the game name has to be in the range from 5 to 20."
         else return undefined
     }
 
     static FINISHED_GAME_TIMEOUT = 5000
 
     private users = new Map<string, GoUser>()
-
-    private state: string[][] = []
-    private turn = 'b'
+    private interestedUsers: GoUser[] = []
     private config: GoGameConfigI
 
+    private pieces: string[][] = []
+    private turn = 'b'
+    
     private goEnd: GoEndI | null = null
     
     private whitePlayer: string | null = null
     private blackPlayer: string | null = null
 
-    private passingUsers: string[] = []
-    private givingUpUsers: string[] = []
+    private passingRoles: string[] = []
+    private givingUpRoles: string[] = []
 
     private whitePiecesCaught = 0
     private blackPiecesCaught = 0
@@ -58,13 +54,13 @@ export class GoGame {
         for (let yi = 0; yi < this.config.size; yi ++) {
             let row: string[] = []
             for (let xi = 0; xi < this.config.size; xi ++) row.push(' ')
-            this.state.push(row)
+            this.pieces.push(row)
         }
-        console.log('Game initialized. Size: ' + this.state.length + 'x' + this.state[0].length)
+        this.log('Game initialized. Size: ' + this.pieces.length + 'x' + this.pieces[0].length)
     }
 
     getPiece(gridX: number, gridY: number) {
-        return gridY >= 0 && gridX >= 0 && gridY < this.state.length && gridX < this.state[0].length ? this.state[gridY][gridX] : undefined
+        return gridY >= 0 && gridX >= 0 && gridY < this.pieces.length && gridX < this.pieces[0].length ? this.pieces[gridY][gridX] : undefined
     }
     getTurn() { return this.turn }
     getConfig() { return this.config }
@@ -80,6 +76,37 @@ export class GoGame {
         ]
     }
 
+    interestedUser(user: GoUser) { this.interestedUsers.push(user) }
+    uninterestUser(user: GoUser) {
+        const index = this.interestedUsers.indexOf(user)
+        if (index >= 0) {
+            this.interestedUsers.splice(index,1)
+        }
+    }
+
+    private sendUserStateToClients() {
+        const userGameState = this.clientUserGameState()
+        this.users.forEach((user,_) => {
+            user.updateGameState(userGameState)
+        })
+        this.interestedUsers.forEach(user => user.updateGameState(userGameState))
+    }
+
+    log(text?: any) {
+        if (text !== undefined) console.log("\x1b[36mGoGame '" + this.config.name + "' logs:\x1b[0m " + text)
+        else console.log()
+    }
+
+    private newRole(): string | null {
+        let role: string | null = null
+        
+        if (this.blackPlayer === null && this.whitePlayer === null) role = this.config.firstColor
+        else if (this.whitePlayer !== null && this.blackPlayer === null) role = this.blackPlayer
+        else if (this.blackPlayer !== null && this.whitePlayer === null) role = this.whitePlayer
+
+        return role
+    }
+
     inviteUser(user: GoUser, name: string): string | undefined {
         if (user.isInitialized()) return "You have already been initialized."
         else {
@@ -88,18 +115,20 @@ export class GoGame {
                 const nameValidation = GoGame.validateUserName(name)
                 if (nameValidation) return nameValidation
                 else {
-                    let role: string | null = null
-        
-                    if (!this.blackPlayer && !this.whitePlayer) role = this.config.firstColor
-                    else if (this.whitePlayer) role = this.blackPlayer
-                    else if (this.blackPlayer) role = this.whitePlayer
+                    const newRole = this.newRole()
 
-                    user.initialize(this, name, role)
+                    user.joinGame(this, name, newRole)
                     this.users.set(name, user)
 
-                    console.log("User name: '" + name + "', role: '" + role + "' has successfully joined.")
-                    console.log('User list: ' + JSON.stringify([...this.users.values()]))
-                    console.log("______")
+                    if (newRole === 'w') this.whitePlayer = name
+                    else if (newRole === 'b') this.blackPlayer = name
+
+                    this.sendUserStateToClients()
+
+                    this.log("User name: '" + name + "', role: '" + newRole + "' has successfully joined.")
+                    this.log(this.blackPlayer)
+                    this.log(this.whitePlayer)
+                    this.log("______")
                     
                     return undefined
                 }
@@ -140,13 +169,14 @@ export class GoGame {
 
     private clientMoveGameState(): ClientGoGameStateI {
         return {
-            pieces: this.state,
+            pieces: this.pieces,
             turn: this.turn,
             gameName: this.config.name,
             blackPiecesCaught: this.blackPiecesCaught,
             whitePiecesCaught: this.whitePiecesCaught,
-            passingPlayers: this.passingUsers,
-            givingUpPlayers: this.givingUpUsers
+            advance: this.config.advance,
+            passingRoles: this.passingRoles,
+            givingUpRoles: this.givingUpRoles
         }
     }
 
@@ -156,7 +186,8 @@ export class GoGame {
             blackPlayer: this.blackPlayer,
             whitePlayer: this.whitePlayer,
             turn: this.turn,
-            gameName: this.config.name
+            gameName: this.config.name,
+            futureRole: this.newRole()
         }
     }
 
@@ -182,11 +213,11 @@ export class GoGame {
         }, GoGame.FINISHED_GAME_TIMEOUT)
     }
 
-    userMove(move: GoMoveI, userName: string): string | undefined {
+    userMove(move: GoMoveI, userRole: string): string | undefined {
         if (this.blackPlayer && this.whitePlayer) { // if two players are in game
             if (!this.goEnd) { // if game hasn't finished yet
-                if (userName === this.blackPlayer || userName === this.whitePlayer) { // if user is a player
-                    if (userName === this.turn) { // If it was user's turn
+                if (userRole === 'w' || userRole === 'b') { // if user is a player
+                    if (userRole === this.turn) { // If it was user's turn
                         let moveResult: string | undefined = undefined
                         
                         if (move.pos) {
@@ -195,25 +226,29 @@ export class GoGame {
                                 move.pos.gridY
                             )
                         }
-                        else if (move.pass) {
-                            this.passingUsers.push(userName)
-                            if (this.passingUsers.length === 2) {
+                        else if (move.pass === true) {
+                            this.passingRoles.push(userRole)
+                            if (this.passingRoles.length === 2) {
                                 // GAME END!
                                 this.userEndGame()
                             }
                         }
-                        else if (move.giveup) {
-                            this.givingUpUsers.push(userName)
-                            if (this.givingUpUsers.length === 2) {
+                        else if (move.giveup === true) {
+                            this.givingUpRoles.push(userRole)
+                            if (this.givingUpRoles.length === 2) {
                                 // GAME END! - this.givingUpUsers[0] has given up and looses in anyway
-                                this.userEndGame(this.givingUpUsers[0])
+                                this.userEndGame(this.givingUpRoles[0])
                             }
                         }
                         else moveResult = "There must either move.pos, move.pass or move.givup be set."
     
                         if (!moveResult) {
-                            if (!move.pass) this.passingUsers = []
-                            if (!move.giveup) this.givingUpUsers = []
+this.log('successfully moved...')
+this.log(this.toString())
+this.log()
+                            
+                            if (move.pass !== true) this.passingRoles = []
+                            if (move.giveup !== true) this.givingUpRoles = []
 
                             this.turn = this.otherColor(this.turn) // change player's turn
 
@@ -227,7 +262,7 @@ export class GoGame {
                     }
                     else return 'It is not your turn to move.'
                 }
-                else return 'You are not allowed to do this move.'
+                else return 'You are not allowed to do this move.'  
             } 
             else return 'The game has already finished.'
         }
@@ -235,14 +270,14 @@ export class GoGame {
     }
 
     move(gridX: number, gridY: number, changeTurn?: boolean): string | undefined {
-        console.log()
-        console.log('Executing move ' + this.getTurn() + gridX + '_' + gridY + '!')
-        console.log(this.otherColor(this.turn))
-        console.log('Turn: ' + this.turn)
+        this.log()
+        this.log('Executing move ' + this.getTurn() + gridX + '_' + gridY + '!')
+        this.log(this.otherColor(this.turn))
+        this.log('Turn: ' + this.turn)
         
         const neighbours = this.neighbours(gridX, gridY)
         const piece = this.getPiece(gridX, gridY)
-        console.log(neighbours)
+        this.log(neighbours)
 
         if (!piece) return 'The position (' + gridX + ' | ' + gridY + ') is out of range!'
 
@@ -253,7 +288,7 @@ export class GoGame {
             return 'Suicide is not allowed!'
 
         else {
-            this.state[gridY][gridX] = this.turn
+            this.pieces[gridY][gridX] = this.turn
             const caughtPieces = this.removeDeadPieces()
 
             this.blackPiecesCaught += caughtPieces.blackRemoved
@@ -270,8 +305,8 @@ export class GoGame {
         let blackCount = 0
         let whiteCount = 0
 
-        for (let yi = 0; yi < this.state.length; yi ++) {
-            for (let xi = 0; xi < this.state[yi].length; xi ++) {
+        for (let yi = 0; yi < this.pieces.length; yi ++) {
+            for (let xi = 0; xi < this.pieces[yi].length; xi ++) {
                 const piece = this.getPiece(xi, yi)
                 if (piece !== ' ') {
                     const neighbours = this.neighbours(xi, yi)
@@ -283,7 +318,7 @@ export class GoGame {
         cleanedPositions.forEach(cp => {
             if (cp.p === 'b') blackCount ++
             else if (cp.p === 'w') whiteCount ++
-            this.state[cp.y][cp.x] = ' '
+            this.pieces[cp.y][cp.x] = ' '
         })
 
         return {
@@ -295,8 +330,8 @@ export class GoGame {
     dataToString(data: string[][]) { return data.map(item => item.join('')).join('\n') }
     stringToData(string: string) { return string.split('\n').map(item => item.split('')) }
     toString() {
-        const topLine = emptyArray(this.state[0].length, () => '___').join('') + '__'
-        const bottomLine = emptyArray(this.state[0].length, () => '‾‾‾').join('') + '‾‾'
-        return topLine + '\n|' + this.state.map(item => item.map(i => ' '+(i === 'b' ? '●' : (i === 'w' ? '○' : '+'))+' ').join('')).join('|\n|') + '|\n' + bottomLine
+        const topLine = emptyArray(this.pieces[0].length, () => '___').join('') + '__'
+        const bottomLine = emptyArray(this.pieces[0].length, () => '‾‾‾').join('') + '‾‾'
+        return topLine + '\n|' + this.pieces.map(item => item.map(i => ' '+(i === 'b' ? '●' : (i === 'w' ? '○' : '+'))+' ').join('')).join('|\n|') + '|\n' + bottomLine
     }
 }
