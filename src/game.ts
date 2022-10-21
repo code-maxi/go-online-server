@@ -1,5 +1,5 @@
 import { emptyArray } from "./adds"
-import { ClientGoGameStateI, GoEndI, GoMoveI, GoUser } from "./user"
+import { ClientGoGameStateI, GoEndI, GoMoveI, GoUser, GridVectorI } from "./user"
 
 export interface GoGameConfigI {
     size: number,
@@ -40,9 +40,7 @@ export class GoGame {
     private passingRoles: string[] = []
     private givingUpRoles: string[] = []
 
-    private whitePiecesCaught = 0
-    private blackPiecesCaught = 0
-
+    private lastPiece: GridVectorI | undefined = undefined
 
     constructor(config: GoGameConfigI) {
         this.config = config
@@ -50,30 +48,12 @@ export class GoGame {
     }
 
     private initialize() {
-        for (let yi = 0; yi < this.config.size; yi ++) {
-            let row: string[] = []
-            for (let xi = 0; xi < this.config.size; xi ++) row.push(' ')
-            this.pieces.push(row)
-        }
+        this.newGame()
         this.log('Game initialized. Size: ' + this.pieces.length + 'x' + this.pieces[0].length)
     }
 
-    getPiece(gridX: number, gridY: number) {
-        return gridY >= 0 && gridX >= 0 && gridY < this.pieces.length && gridX < this.pieces[0].length ? this.pieces[gridY][gridX] : undefined
-    }
     getTurn() { return this.turn }
     getConfig() { return this.config }
-
-    private otherColor(c: string) { return c === 'w' ? 'b' : (c === 'b' ? 'w' : ' ') }
-
-    private neighbours(gridX: number, gridY: number): (string | undefined)[] {
-        return [
-            this.getPiece(gridX, gridY-1), // top
-            this.getPiece(gridX-1, gridY), // left
-            this.getPiece(gridX, gridY+1), // bottom
-            this.getPiece(gridX+1, gridY), // right
-        ]
-    }
 
     interestUser(user: GoUser) {
         this.interestedUsers.push(user)
@@ -111,6 +91,15 @@ export class GoGame {
         return role
     }
 
+    private newGame() {
+        this.pieces = []
+        for (let yi = 0; yi < this.config.size; yi ++) {
+            let row: string[] = []
+            for (let xi = 0; xi < this.config.size; xi ++) row.push(' ')
+            this.pieces.push(row)
+        }
+    }
+
     inviteUser(user: GoUser, name: string): string | undefined {
         if (user.isInitialized()) return "You have already been initialized."
         else {
@@ -126,6 +115,10 @@ export class GoGame {
 
                     if (newRole === 'w') this.whitePlayer = name
                     else if (newRole === 'b') this.blackPlayer = name
+
+                    if (this.blackPlayer && this.whitePlayer) {
+                        this.newGame()
+                    }
 
                     user.updateGameState(this.clientGameStateAllInAll())
 
@@ -216,7 +209,8 @@ export class GoGame {
             whitePiecesCaught: this.whitePiecesCaught,
             advance: this.config.advance,
             passingRoles: this.passingRoles,
-            givingUpRoles: this.givingUpRoles
+            givingUpRoles: this.givingUpRoles,
+            lastPiece: this.lastPiece
         }
     }
 
@@ -261,10 +255,10 @@ export class GoGame {
                         let moveResult: string | undefined = undefined
                         
                         if (move.pos) {
-                            moveResult = this.move(
-                                move.pos.gridX, 
-                                move.pos.gridY
-                            )
+                            moveResult = this.move(move.pos)
+                            if (!moveResult) {
+                                this.lastPiece = move.pos
+                            }
                         }
                         else if (move.pass === true) {
                             this.passingRoles.push(userRole)
@@ -309,24 +303,24 @@ export class GoGame {
         else return 'There are only you in the game yet.'
     }
 
-    move(gridX: number, gridY: number, changeTurn?: boolean): string | undefined {
+    move(move: GridVectorI, changeTurn?: boolean): string | undefined {
         this.log()
-        this.log('Executing move ' + this.getTurn() + gridX + '_' + gridY + '!')
+        this.log('Executing move ' + this.getTurn() + move.gridX + '_' + move.gridY + '!')
         this.log('Turn: ' + this.turn)
         
-        const neighbours = this.neighbours(gridX, gridY)
-        const piece = this.getPiece(gridX, gridY)
+        const neighbours = this.neighbours(move.gridX, move.gridY)
+        const piece = this.getPiece(move.gridX, move.gridY)
 
-        if (!piece) return 'The position (' + gridX + ' | ' + gridY + ') is out of range!'
+        if (!piece) return 'The position (' + move.gridX + ' | ' + move.gridY + ') is out of range!'
 
         else if (piece !== ' ')
-            return 'The position (' + gridX + ' | ' + gridY + ') is already set!'
+            return 'The position (' + move.gridX + ' | ' + move.gridY + ') is already set!'
         
         else if (neighbours.filter(p => this.otherColor(this.turn) === p).length === neighbours.length)
             return 'Suicide is not allowed!'
 
         else {
-            this.pieces[gridY][gridX] = this.turn
+            this.pieces[move.gridY][move.gridX] = this.turn
             const caughtPieces = this.removeDeadPieces()
 
             this.blackPiecesCaught += caughtPieces.blackRemoved

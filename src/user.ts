@@ -5,6 +5,11 @@ export interface InterestIntoGameI {
     gameName: string
 }
 
+export interface GridVectorI {
+    gridX: number,
+    gridY: number
+}
+
 export interface GoToastI {
     from: string,
     text: string,
@@ -43,7 +48,8 @@ export interface ClientGoGameStateI {
     guiMode?: 'join-mode' | 'game-mode',
     joinError?: string,
     gameDoesNotExistError?: string,
-    futureRole?: string
+    futureRole?: string,
+    lastPiece?: GridVectorI
 }
 
 export interface InterestIntoGameI {
@@ -51,10 +57,7 @@ export interface InterestIntoGameI {
 }
 
 export interface GoMoveI {
-    pos?: {
-        gridX: number,
-        gridY: number,
-    }
+    pos?: GridVectorI,
     pass?: boolean,
     giveup?: boolean
 }
