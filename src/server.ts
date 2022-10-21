@@ -1,18 +1,20 @@
-
 import * as readline from 'node:readline';
-import express from 'express';
-import * as http from 'http';
+import express, { response } from 'express';
 import { GoGame, GoGameConfigI } from './game';
 import { stringToBoolean } from './adds';
 import { GoUser } from './user';
-import { Console } from 'node:console';
+import * as ws from 'ws'
+const ip = require('ip')
 
 export class GoServer {
     static instance: GoServer
 
     private app: express.Express
     private games = new Map<string, GoGame>()
-    private wsServer: http.Server
+    private wsServer: ws.Server
+
+    private port: number
+    private wsPort: number
 
     getGame(gameName: string) { return this.games.get(gameName) }
 
@@ -36,6 +38,11 @@ export class GoServer {
         })
     }
 
+    private getSocketURL() {
+        const localIp = ip.address()
+        return 'ws://' + localIp + ':' + this.wsPort + '/gosocket'
+    }
+
     private initializeExpress() {
         this.log('Initializing Go Server...')
 
@@ -48,10 +55,24 @@ export class GoServer {
             next()
         })
 
+        this.app.use((_, res, next) => {
+            res.header("Access-Control-Allow-Origin", "*")
+            res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
+            next()
+        })
+
         this.app.get('/public-games', (_, response) => {
-            response.end(JSON.stringify({
+            response.type('text/plain')
+            response.send(JSON.stringify({
                 gameNames: [...this.games.values()].filter(g => g.getConfig().public).map(g => g.getConfig().name)
             }))
+        })
+
+        this.app.get('/ws-url', (_, response) => {
+            const socketURl = this.getSocketURL()
+
+            response.type('text/plain')
+            response.send(socketURl)
         })
 
         this.app.post('/create-game', (request, response) => {
@@ -61,12 +82,10 @@ export class GoServer {
             const advanceParam = request.query.advance
             const publicParam = stringToBoolean(request.query.public + '')
 
-            this.log(nameParam)
-            this.log(sizeParam)
-            this.log(firstColorParam)
-            this.log(advanceParam)
-            this.log(publicParam)
+            this.log(JSON.stringify(request.query))
             this.log()
+
+            response.type('text/plain')
             
             if (nameParam && sizeParam && firstColorParam && advanceParam && publicParam !== undefined) {
                 const config = {
@@ -79,22 +98,27 @@ export class GoServer {
 
                 const reponseResult = this.createNewGame(config)
 
-                if (reponseResult) response.end('SERVERERROR:' + reponseResult)
+                if (reponseResult) response.send('SERVERERROR:' + reponseResult)
                 else response.redirect('/game/' + nameParam)
             }
-            else response.end('SERVERERROR:There were not enough url parameters!')
+            else response.send('SERVERERROR: There were not enough url parameters!')
         })
     }
 
     private initializeWebsocketServer(wsPort: number) {
-        this.wsServer = http.createServer(this.app)
+        this.wsPort = wsPort
+
+        this.wsServer = new ws.Server({ port: this.wsPort })
 
         this.wsServer.on('connection', (ws: WebSocket) => {
-            new GoUser('console', ws)
+            new GoUser('socket', ws)
         })
-        this.wsServer.listen(wsPort, () => {
-            this.log('HTTP Server responsible for websockets listens on port ' + wsPort + '.')
+        this.wsServer.on('listening', () => {
+            this.log('Websocket Server is listening on port ' + this.wsPort + '.')
         })
+        /*this.wsServer(this.wsPort, () => {
+            this.log('HTTP Server responsible for websockets listens on port ' + this.wsPort + '.')
+        })*/
     }
 
     log(text?: any) {
@@ -102,7 +126,7 @@ export class GoServer {
         else console.log()
     }
 
-    private createNewGame(config: GoGameConfigI): string | undefined {
+    createNewGame(config: GoGameConfigI): string | undefined {
         if (this.games.get(config.name)) 
             return "The game name '"+config.name+"' does already exist!"
 
@@ -136,6 +160,8 @@ export class GoServer {
             rl.question('\nIt\'s ' + goGame.getTurn()+ '\'s turn. Enter Move: \n', (data) => {
                 const gridPos = (data as string).split(',').map(s => +s)
                 const moveResult = goGame.move(gridPos[0], gridPos[1], true)
+                console.log()
+                console.log(goGame.toString())
                 if (moveResult) this.log('Error: ' + moveResult)
                 ask()
             })
@@ -155,7 +181,7 @@ export class GoServer {
         const creationError = this.createNewGame({
             name: '#go',
             firstColor: 'w',
-            size: 5,
+            size: 19,
             advance: 0.5,
             public: true
         })

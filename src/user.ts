@@ -5,6 +5,12 @@ export interface InterestIntoGameI {
     gameName: string
 }
 
+export interface GoToastI {
+    from: string,
+    text: string,
+    autoHide?: number
+}
+
 export interface SendFormatI {
     header: string,
     value: any
@@ -37,8 +43,7 @@ export interface ClientGoGameStateI {
     guiMode?: 'join-mode' | 'game-mode',
     joinError?: string,
     gameDoesNotExistError?: string,
-    futureRole?: string,
-    connected?: boolean
+    futureRole?: string
 }
 
 export interface InterestIntoGameI {
@@ -54,9 +59,8 @@ export interface GoMoveI {
     giveup?: boolean
 }
 
-export interface JoinGameI {
-    name: string,
-    gameName: string
+export interface JoinInterestedGameI {
+    name: string
 }
 
 export interface ResponseResultI {
@@ -81,29 +85,43 @@ export class GoUser {
         
         if (medium === 'socket') {
             this.webSocket = webSocket
+            this.initializeWebSocket()
+        }
+    }
 
-            this.webSocket.onmessage = (ev) => {
-                try {
-                    const data = JSON.parse(''+ev.data) as SendFormatI
-                    this.onMessage(data)
-                }
-                catch (e) { this.log('Format Exception: The format of the message "' + ev.data + '" could not be parsed as SendFormatI.') }
-            }
+    displayToasts(toasts: GoToastI[]) {
+        this.send('display-toasts', toasts)
+    }
 
-            this.webSocket.onopen = (_) => {
-                this.updateGameState({
-                    connected: true
-                })
-            }
+    private initializeWebSocket() {
+        this.log('User created. Initializing web socket...')
 
-            this.webSocket.onerror = (_) => {
-                this.log('WEBSOCKET ERROR!')
+        this.webSocket.onmessage = (ev) => {
+            try {
+                const data = JSON.parse(''+ev.data) as SendFormatI
+                this.onMessage(data)
             }
+            catch (e) { this.log('Format Exception: The format of the message "' + ev.data + '" could not be parsed as SendFormatI.') }
+        }
+
+        this.webSocket.onclose = (ev) => {
+            this.log('Closed. Reason: "' + ev.reason + '"')
+
+            if (this.game) { this.game.closeUser(this, ev.reason) }
+            else if (this.interestedGame) { GoServer.instance.getGame(this.interestedGame).closeUser(this, ev.reason) }
+        }
+
+        this.webSocket.onopen = (_) => {
+            this.log('Websocket successfully opened!')
+        }
+
+        this.webSocket.onerror = (_) => {
+            this.log('WEBSOCKET ERROR!')
         }
     }
 
     log(text?: any) {
-        if (text !== undefined) console.log("\x1b[31mServer logs:\x1b[0m " + text)
+        if (text !== undefined) console.log("\x1b[31mUser (name=" + this.name +"|role="+ this.role + "):\x1b[0m " + text)
         else console.log()
     }
 
@@ -127,7 +145,11 @@ export class GoUser {
             console.log("    " + JSON.stringify(v))
             console.log("_______")
         }
-        else this.webSocket.send(JSON.stringify({ header: h, value: v }))
+        else {
+            const message = JSON.stringify({ header: h, value: v })
+            this.log('Sending message ' + message)
+            this.webSocket.send(message)
+        }
     }
 
     updateGameState(state: ClientGoGameStateI) {
@@ -145,26 +167,38 @@ export class GoUser {
             const h = castedMessage.header
             const v = castedMessage.value
 
+            this.log('recieving message width header "' + h + '":')
+            this.log(JSON.stringify(v))
+            this.log()
+
             const wrongFormatException = () => this.send('EXC-FORM', "The value '" + JSON.stringify(v) + "' of header message '" + h + "' has the wrong format.")
 
             if (h === 'go-move') {
                 try {
                     const casted = v as GoMoveI
-                    const moveError = this.game.userMove(casted, this.name)
-                    if (moveError) this.updateGameState({ boardError: moveError })
+                    const moveError = this.game.userMove(casted, this.role)
+                    if (moveError) {
+                        this.log('Move Error: ' + moveError)
+                        this.updateGameState({ boardError: moveError })
+                    }
                 }
                 catch(e) { wrongFormatException() }
             }
     
             else if (h === 'join-game') {
                 try {
-                    const casted = v as JoinGameI
+                    const casted = v as JoinInterestedGameI
     
-                    let joiningError: string | undefined = undefined
-                    const game = GoServer.instance.getGame(casted.gameName)
+                    let joiningError: string | undefined = this.interestedGame ? undefined : "You have not interested yet."
+
+                    if (!joiningError) {
+                        const game = GoServer.instance.getGame(this.interestedGame)
     
-                    if (game) joiningError = game.inviteUser(this, casted.name)
-                    else joiningError = "The game '" + casted.gameName + "' does not exist."
+                        if (game) joiningError = game.inviteUser(this, casted.name)
+                        else joiningError = "The game '" + this.interestedGame + "' you was interested in does not exist anymore."
+                    }
+                    
+                    if (!joiningError) this.send('successfully-joined', null)
 
                     this.updateGameState({
                         guiMode: joiningError ? undefined : 'game-mode',
@@ -177,11 +211,17 @@ export class GoUser {
             else if (h === 'interested-into-game') {
                 try {
                     const casted = v as InterestIntoGameI
+                    this.log('Interessted into Game ' + casted.gameName)
     
                     const game = GoServer.instance.getGame(casted.gameName)
+
                     if (game) {
-                        if (this.interestedGame) GoServer.instance.getGame(this.interestedGame)?.uninterestUser(this)
-                        game.interestedUser(this)
+                        this.interestedGame = casted.gameName
+
+                        if (this.interestedGame) game.uninterestUser(this)
+                        game.interestUser(this)
+
+                        this.send('successfully-interessted', null)
                     }
 
                     this.updateGameState({
@@ -191,6 +231,8 @@ export class GoUser {
                 catch(e) { wrongFormatException() }
             }
         }
-        catch (e) { this.send('EXC-FORM', "The format of any message must match {header: string, value: string} (SendFormat).") }
+        catch (e) {
+            this.send('EXC-FORM', "The format of any message must match {header: string, value: string} (SendFormat).")
+        }
     }
 }

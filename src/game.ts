@@ -11,8 +11,7 @@ export interface GoGameConfigI {
 
 export class GoGame {
     static validateGameConfig(config: GoGameConfigI): string | undefined {
-        if (config.name[0] !== '#') return "The game name has to start with a '#'."
-        else if (config.name.length < 3 || config.name.length > 20) return "The length of the game name has to be in the range from 3 to 20."
+        if (config.name.length < 3 || config.name.length > 20) return "The length of the game name has to be in the range from 3 to 20."
         else if (!(config.firstColor === 'b' || config.firstColor === 'w')) return "The parameter firstColor must either be 'b' or 'w'."
         else if (config.size < 5 || config.size > 19) return "The board size must be in the range of 5 to 19."
         else if (config.size < 0.5 || config.size > 15.5) return "The advance must be in the range of 0.5 to 15.5."
@@ -76,7 +75,10 @@ export class GoGame {
         ]
     }
 
-    interestedUser(user: GoUser) { this.interestedUsers.push(user) }
+    interestUser(user: GoUser) {
+        this.interestedUsers.push(user)
+        user.updateGameState(this.clientUserGameState(true))
+    }
     uninterestUser(user: GoUser) {
         const index = this.interestedUsers.indexOf(user)
         if (index >= 0) {
@@ -86,10 +88,12 @@ export class GoGame {
 
     private sendUserStateToClients() {
         const userGameState = this.clientUserGameState()
+        const userGameStateInterested = this.clientUserGameState(true)
+        
         this.users.forEach((user,_) => {
             user.updateGameState(userGameState)
         })
-        this.interestedUsers.forEach(user => user.updateGameState(userGameState))
+        this.interestedUsers.forEach(user => user.updateGameState(userGameStateInterested))
     }
 
     log(text?: any) {
@@ -97,12 +101,12 @@ export class GoGame {
         else console.log()
     }
 
-    private newRole(): string | null {
+    private futureRole(): string | null {
         let role: string | null = null
         
-        if (this.blackPlayer === null && this.whitePlayer === null) role = this.config.firstColor
-        else if (this.whitePlayer !== null && this.blackPlayer === null) role = this.blackPlayer
-        else if (this.blackPlayer !== null && this.whitePlayer === null) role = this.whitePlayer
+        if (!this.blackPlayer && !this.whitePlayer) role = this.config.firstColor
+        else if (this.whitePlayer && !this.blackPlayer) role = 'b'
+        else if (this.blackPlayer && !this.whitePlayer) role = 'w'
 
         return role
     }
@@ -115,7 +119,7 @@ export class GoGame {
                 const nameValidation = GoGame.validateUserName(name)
                 if (nameValidation) return nameValidation
                 else {
-                    const newRole = this.newRole()
+                    const newRole = this.futureRole()
 
                     user.joinGame(this, name, newRole)
                     this.users.set(name, user)
@@ -123,7 +127,19 @@ export class GoGame {
                     if (newRole === 'w') this.whitePlayer = name
                     else if (newRole === 'b') this.blackPlayer = name
 
+                    user.updateGameState(this.clientGameStateAllInAll())
+
                     this.sendUserStateToClients()
+
+                    setTimeout(() => {
+                        this.users.forEach((userP, _) => {
+                            if (userP !== user) userP.displayToasts([{
+                                from: name,
+                                text: "Hi there! I just joined the game.",
+                                autoHide: 7000
+                            }])
+                        })
+                    }, 500)
 
                     this.log("User name: '" + name + "', role: '" + newRole + "' has successfully joined.")
                     this.log(this.blackPlayer)
@@ -133,6 +149,30 @@ export class GoGame {
                     return undefined
                 }
             }
+        }
+    }
+
+    closeUser(user: GoUser, reason: string) {
+        if (user.getName()) {
+            this.users.delete(user.getName())
+            if (user.getRole() === 'b') this.blackPlayer = null
+            else if (user.getRole() === 'w') this.whitePlayer = null
+
+            this.sendUserStateToClients()
+
+            setTimeout(() => {
+                this.users.forEach((user, _) => {
+                    user.displayToasts([{
+                        from: user.getName(),
+                        text: "Bye guys! " + reason,
+                        autoHide: 7000
+                    }])
+                })
+            }, 500)
+        }
+        else  {
+            const index = this.interestedUsers.indexOf(user)
+            this.interestedUsers.splice(index, 1)
         }
     }
 
@@ -167,7 +207,7 @@ export class GoGame {
         }
     }
 
-    private clientMoveGameState(): ClientGoGameStateI {
+    private clientGoGameState(): ClientGoGameStateI {
         return {
             pieces: this.pieces,
             turn: this.turn,
@@ -180,20 +220,20 @@ export class GoGame {
         }
     }
 
-    private clientUserGameState(): ClientGoGameStateI {
+    private clientUserGameState(interesstedUser?: boolean): ClientGoGameStateI {
         return {
             viewers: [...this.users.keys()].filter(id => id !== this.blackPlayer && id !== this.whitePlayer),
             blackPlayer: this.blackPlayer,
             whitePlayer: this.whitePlayer,
-            turn: this.turn,
-            gameName: this.config.name,
-            futureRole: this.newRole()
+            turn: interesstedUser === true ? undefined : this.turn,
+            futureRole: interesstedUser === true ? this.futureRole() : undefined,
+            gameName: this.config.name
         }
     }
 
     private clientGameStateAllInAll(): ClientGoGameStateI {
         return {
-            ...this.clientMoveGameState(),
+            ...this.clientGoGameState(),
             ...this.clientUserGameState(),
             goEnd: this.goEnd
         }
@@ -243,16 +283,16 @@ export class GoGame {
                         else moveResult = "There must either move.pos, move.pass or move.givup be set."
     
                         if (!moveResult) {
-this.log('successfully moved...')
-this.log(this.toString())
-this.log()
+                            this.log('Successfully moved...\n')
+                            this.log(this.toString())
+                            this.log()
                             
                             if (move.pass !== true) this.passingRoles = []
                             if (move.giveup !== true) this.givingUpRoles = []
 
                             this.turn = this.otherColor(this.turn) // change player's turn
 
-                            const newGameState = this.clientMoveGameState()
+                            const newGameState = this.clientGoGameState()
 
                             this.users.forEach((user, id) => {
                                 user.updateGameState(newGameState)
@@ -272,12 +312,10 @@ this.log()
     move(gridX: number, gridY: number, changeTurn?: boolean): string | undefined {
         this.log()
         this.log('Executing move ' + this.getTurn() + gridX + '_' + gridY + '!')
-        this.log(this.otherColor(this.turn))
         this.log('Turn: ' + this.turn)
         
         const neighbours = this.neighbours(gridX, gridY)
         const piece = this.getPiece(gridX, gridY)
-        this.log(neighbours)
 
         if (!piece) return 'The position (' + gridX + ' | ' + gridY + ') is out of range!'
 
