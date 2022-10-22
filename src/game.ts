@@ -1,4 +1,5 @@
 import { emptyArray } from "./adds"
+import { GoGameLogic } from "./game-logic"
 import { ClientGoGameStateI, GoEndI, GoMoveI, GoUser, GridVectorI } from "./user"
 
 export interface GoGameConfigI {
@@ -28,9 +29,6 @@ export class GoGame {
     private users = new Map<string, GoUser>()
     private interestedUsers: GoUser[] = []
     private config: GoGameConfigI
-
-    private pieces: string[][] = []
-    private turn = 'b'
     
     private goEnd: GoEndI | null = null
     
@@ -40,20 +38,21 @@ export class GoGame {
     private passingRoles: string[] = []
     private givingUpRoles: string[] = []
 
-    private lastPiece: GridVectorI | undefined = undefined
+    private logic: GoGameLogic
 
     constructor(config: GoGameConfigI) {
         this.config = config
+        this.logic = new GoGameLogic((v) => this.log(v))
         this.initialize()
     }
 
     private initialize() {
-        this.newGame()
-        this.log('Game initialized. Size: ' + this.pieces.length + 'x' + this.pieces[0].length)
+        this.logic.newGame(this.config.size)
     }
 
-    getTurn() { return this.turn }
+    getTurn() { return this.logic.turn }
     getConfig() { return this.config }
+    getLogic() { return this.logic }
 
     interestUser(user: GoUser) {
         this.interestedUsers.push(user)
@@ -91,15 +90,6 @@ export class GoGame {
         return role
     }
 
-    private newGame() {
-        this.pieces = []
-        for (let yi = 0; yi < this.config.size; yi ++) {
-            let row: string[] = []
-            for (let xi = 0; xi < this.config.size; xi ++) row.push(' ')
-            this.pieces.push(row)
-        }
-    }
-
     inviteUser(user: GoUser, name: string): string | undefined {
         if (user.isInitialized()) return "You have already been initialized."
         else {
@@ -117,7 +107,7 @@ export class GoGame {
                     else if (newRole === 'b') this.blackPlayer = name
 
                     if (this.blackPlayer && this.whitePlayer) {
-                        this.newGame()
+                        this.logic.newGame(this.config.size)
                     }
 
                     user.updateGameState(this.clientGameStateAllInAll())
@@ -169,48 +159,17 @@ export class GoGame {
         }
     }
 
-    private getGameEnd(): GoEndI {
-        // TODO
-
-        let blackPoints = 0
-        let whitePoints = 0
-
-        whitePoints += this.config.advance
-        
-        blackPoints += this.whitePiecesCaught
-        whitePoints += this.blackPiecesCaught
-
-        const areaPoints = this.getAreaPoints()
-
-        blackPoints += areaPoints.blackAreaPoints
-        whitePoints += areaPoints.whiteAreaPoints
-
-        return {
-            whitePoints: whitePoints,
-            blackPoints: blackPoints
-        }
-    }
-
-    private getAreaPoints(): { whiteAreaPoints: number, blackAreaPoints: number } {
-        // TODO!!!
-
-        return {
-            whiteAreaPoints: 0,
-            blackAreaPoints: 0
-        }
-    }
-
     private clientGoGameState(): ClientGoGameStateI {
         return {
-            pieces: this.pieces,
-            turn: this.turn,
+            pieces: this.logic.getPieces(),
+            turn: this.logic.turn,
             gameName: this.config.name,
-            blackPiecesCaught: this.blackPiecesCaught,
-            whitePiecesCaught: this.whitePiecesCaught,
+            blackPiecesCaught: this.logic.getCaughtPieces().b,
+            whitePiecesCaught: this.logic.getCaughtPieces().w,
             advance: this.config.advance,
             passingRoles: this.passingRoles,
             givingUpRoles: this.givingUpRoles,
-            lastPiece: this.lastPiece
+            lastPiece: this.logic.getLastPiece().pos
         }
     }
 
@@ -219,7 +178,7 @@ export class GoGame {
             viewers: [...this.users.keys()].filter(id => id !== this.blackPlayer && id !== this.whitePlayer),
             blackPlayer: this.blackPlayer,
             whitePlayer: this.whitePlayer,
-            turn: interesstedUser === true ? undefined : this.turn,
+            turn: interesstedUser === true ? undefined : this.logic.turn,
             futureRole: interesstedUser === true ? this.futureRole() : undefined,
             gameName: this.config.name
         }
@@ -234,8 +193,10 @@ export class GoGame {
     }
 
     private userEndGame(givenUpUser?: string) {
+        const result = this.logic.gameEnd(this.config.advance)
+
         // set go end result
-        this.goEnd = { ...this.getGameEnd(), givenUpUser: givenUpUser}
+        this.goEnd = { blackScore: result[0], whiteScore: result[1], givenUpUser: givenUpUser}
 
         // wait a little bit
         setTimeout(() => {
@@ -251,14 +212,11 @@ export class GoGame {
         if (this.blackPlayer && this.whitePlayer) { // if two players are in game
             if (!this.goEnd) { // if game hasn't finished yet
                 if (userRole === 'w' || userRole === 'b') { // if user is a player
-                    if (userRole === this.turn) { // If it was user's turn
+                    if (userRole === this.logic.turn) { // If it was user's turn
                         let moveResult: string | undefined = undefined
                         
                         if (move.pos) {
-                            moveResult = this.move(move.pos)
-                            if (!moveResult) {
-                                this.lastPiece = move.pos
-                            }
+                            moveResult = this.logic.move(move.pos)
                         }
                         else if (move.pass === true) {
                             this.passingRoles.push(userRole)
@@ -284,7 +242,7 @@ export class GoGame {
                             if (move.pass !== true) this.passingRoles = []
                             if (move.giveup !== true) this.givingUpRoles = []
 
-                            this.turn = this.otherColor(this.turn) // change player's turn
+                            this.logic.toggleTurn()
 
                             const newGameState = this.clientGoGameState()
 
@@ -301,69 +259,5 @@ export class GoGame {
             else return 'The game has already finished.'
         }
         else return 'There are only you in the game yet.'
-    }
-
-    move(move: GridVectorI, changeTurn?: boolean): string | undefined {
-        this.log()
-        this.log('Executing move ' + this.getTurn() + move.gridX + '_' + move.gridY + '!')
-        this.log('Turn: ' + this.turn)
-        
-        const neighbours = this.neighbours(move.gridX, move.gridY)
-        const piece = this.getPiece(move.gridX, move.gridY)
-
-        if (!piece) return 'The position (' + move.gridX + ' | ' + move.gridY + ') is out of range!'
-
-        else if (piece !== ' ')
-            return 'The position (' + move.gridX + ' | ' + move.gridY + ') is already set!'
-        
-        else if (neighbours.filter(p => this.otherColor(this.turn) === p).length === neighbours.length)
-            return 'Suicide is not allowed!'
-
-        else {
-            this.pieces[move.gridY][move.gridX] = this.turn
-            const caughtPieces = this.removeDeadPieces()
-
-            this.blackPiecesCaught += caughtPieces.blackRemoved
-            this.whitePiecesCaught += caughtPieces.whiteRemoved
-
-            if (changeTurn === true) this.turn = this.otherColor(this.turn)
-
-            return undefined
-        }
-    }
-
-    private removeDeadPieces(): { blackRemoved: number, whiteRemoved: number } {
-        let cleanedPositions: { x:number, y:number, p: string }[] = []
-        let blackCount = 0
-        let whiteCount = 0
-
-        for (let yi = 0; yi < this.pieces.length; yi ++) {
-            for (let xi = 0; xi < this.pieces[yi].length; xi ++) {
-                const piece = this.getPiece(xi, yi)
-                if (piece !== ' ') {
-                    const neighbours = this.neighbours(xi, yi)
-                    if (!neighbours.find(n => n === ' ' || n === this.getTurn())) cleanedPositions.push({x: xi, y: yi, p: piece})
-                }
-            }
-        }
-
-        cleanedPositions.forEach(cp => {
-            if (cp.p === 'b') blackCount ++
-            else if (cp.p === 'w') whiteCount ++
-            this.pieces[cp.y][cp.x] = ' '
-        })
-
-        return {
-            blackRemoved: blackCount,
-            whiteRemoved: whiteCount
-        }
-    }
-
-    dataToString(data: string[][]) { return data.map(item => item.join('')).join('\n') }
-    stringToData(string: string) { return string.split('\n').map(item => item.split('')) }
-    toString() {
-        const topLine = emptyArray(this.pieces[0].length, () => '___').join('') + '__'
-        const bottomLine = emptyArray(this.pieces[0].length, () => '‾‾‾').join('') + '‾‾'
-        return topLine + '\n|' + this.pieces.map(item => item.map(i => ' '+(i === 'b' ? '●' : (i === 'w' ? '○' : '+'))+' ').join('')).join('|\n|') + '|\n' + bottomLine
     }
 }

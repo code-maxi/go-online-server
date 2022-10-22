@@ -22,8 +22,8 @@ export interface SendFormatI {
 }
 
 export interface GoEndI {
-    blackPoints: number,
-    whitePoints: number,
+    blackScore: number,
+    whiteScore: number,
     givenUpUser?: string
 }
 

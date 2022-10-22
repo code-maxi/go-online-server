@@ -4,6 +4,7 @@ import { GoGame, GoGameConfigI } from './game';
 import { stringToBoolean } from './adds';
 import { GoUser } from './user';
 import * as ws from 'ws'
+import { GoGameLogic } from './game-logic';
 const ip = require('ip')
 
 export class GoServer {
@@ -142,13 +143,19 @@ export class GoServer {
     }
 
     goLoop() {
-        const goGame = new GoGame({
-            size: 5,
-            firstColor: 'b',
-            name: 'test',
-            advance: 2.5,
-            public: true
-        })
+        const goGame = new GoGameLogic()
+
+        goGame.setPieces([
+            [ 'b','b','b',' ',' ' ],
+            [ 'b',' ','b',' ',' ' ],
+            [ 'b','w','b',' ',' ' ],
+            [ 'b','w','b',' ',' ' ],
+            [ 'b','b','b',' ',' ' ],
+        ])
+
+        console.log('Game start pieces:')
+        console.log(goGame.toString())
+        console.log('____')
 
         const rl = readline.createInterface({
             input: process.stdin,
@@ -157,12 +164,12 @@ export class GoServer {
         
 
         const ask = () => {
-            rl.question('\nIt\'s ' + goGame.getTurn()+ '\'s turn. Enter Move: \n', (data) => {
+            rl.question('\nIt\'s ' + goGame.turn+ '\'s turn. Enter Move: \n', (data) => {
                 const gridPos = (data as string).split(',').map(s => +s)
-                const moveResult = goGame.move({ gridX: gridPos[0], gridY: gridPos[1] }, true)
-                console.log()
-                console.log(goGame.toString())
+                const moveResult = goGame.move({ gridX: gridPos[0], gridY: gridPos[1] })
+
                 if (moveResult) this.log('Error: ' + moveResult)
+                else goGame.toggleTurn()
                 ask()
             })
         }
